@@ -29,6 +29,8 @@
 #include <zephyr/bluetooth/hci_raw.h>
 #include <zephyr/bluetooth/hci_vs.h>
 
+#include "status_leds.h"
+
 #define LOG_MODULE_NAME hci_uart
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
@@ -129,6 +131,7 @@ static void rx_isr(void)
 			 */
 			if (read) {
 				if (valid_type(type)) {
+					status_leds_rx_activity();
 					/* Get expected header size and switch
 					 * to receiving header.
 					 */
@@ -276,9 +279,34 @@ static void tx_thread(void *p1, void *p2, void *p3)
 	}
 }
 
+/* Light LED4 on every LE Advertising Report leaving for the host, so radio
+ * reception is observable on the board itself. Layout at this point is the
+ * on-wire H4 frame: [0] H4 type, [1] event code, [2] param len, [3] LE
+ * subevent code.
+ */
+static void led_flash_if_adv_report(const struct net_buf *buf)
+{
+	if (buf->len < 4) {
+		return;
+	}
+
+	if (buf->data[0] != H4_EVT ||
+	    buf->data[1] != BT_HCI_EVT_LE_META_EVENT) {
+		return;
+	}
+
+	if (buf->data[3] == BT_HCI_EVT_LE_ADVERTISING_REPORT ||
+	    buf->data[3] == BT_HCI_EVT_LE_EXT_ADVERTISING_REPORT) {
+		status_leds_adv_report();
+	}
+}
+
 static int h4_send(struct net_buf *buf)
 {
 	LOG_DBG("buf %p type %u len %u", buf, buf->data[0], buf->len);
+
+	led_flash_if_adv_report(buf);
+	status_leds_tx_activity();
 
 	k_fifo_put(&uart_tx_queue, buf);
 	uart_irq_tx_enable(hci_uart_dev);
